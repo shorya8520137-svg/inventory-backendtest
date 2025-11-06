@@ -2,7 +2,19 @@ const mysql = require('mysql2');
 const { URL } = require('url');
 
 // Parse DB_URL from environment
-const dbUrl = process.env.DB_URL;
+const rawUrl = process.env.DB_URL;
+if (!rawUrl) {
+    console.error('❌ Missing DB_URL in environment');
+    process.exit(1);
+}
+
+let dbUrl;
+try {
+    dbUrl = new URL(rawUrl);
+} catch (err) {
+    console.error('❌ Invalid DB_URL format:', err.message);
+    process.exit(1);
+}
 
 // Create MySQL connection with explicit fields
 const db = mysql.createConnection({

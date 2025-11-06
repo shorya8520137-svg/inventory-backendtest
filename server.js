@@ -1,7 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const app = express();
-require('dotenv').config(); // ✅ Load .env variables
+
 
 // 🛡️ Global Middleware
 app.use(cors()); // ✅ Enable CORS for cross-origin requests
