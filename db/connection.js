@@ -2,7 +2,7 @@ const mysql = require('mysql2');
 const { URL } = require('url');
 
 // Parse DB_URL from environment
-const dbUrl = new URL(process.env.DB_URL);
+const dbUrl = process.env.DB_URL;
 
 // Create MySQL connection with explicit fields
 const db = mysql.createConnection({
