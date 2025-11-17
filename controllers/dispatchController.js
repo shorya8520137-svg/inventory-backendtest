@@ -1,6 +1,6 @@
 const db = require('../db/connection');
 
-// 🔍 AWB Uniqueness Check Across All Warehouses
+// 🔍 Check AWB Exists Across All Warehouses
 const checkAwbExists = async (awb) => {
     if (!awb || typeof awb !== 'string' || awb.trim() === '') return false;
 
@@ -23,68 +23,88 @@ const checkAwbExists = async (awb) => {
     });
 };
 
-// ✅ GET: Warehouses
+// ✅ GET: Warehouses — From dispatch_warehouse
 exports.getWarehouses = (req, res) => {
-    res.json([
-        'Mumbai Warehouse',
-        'Hyderabad Warehouse',
-        'Ahmedabad Warehouse',
-        'Bangalore Warehouse',
-        'Gurgaon Warehouse'
-    ]);
+    db.query(`SELECT warehouse_name FROM dispatch_warehouse ORDER BY warehouse_name ASC`, (err, results) => {
+        if (err) {
+            console.error('[Dispatch] ❌ Failed to fetch warehouses:', err.message);
+            return res.status(500).json({ error: 'Failed to fetch warehouses' });
+        }
+
+        const data = results.map(row => row.warehouse_name);
+        console.log('[Dispatch] ✅ Warehouses:', data);
+        res.json(data);
+    });
 };
 
-// ✅ GET: Logistics Partners
+// ✅ GET: Logistics Partners — From logistics
 exports.getLogistics = (req, res) => {
-    res.json(['Delhivery', 'Blue Dart', 'XpressBees', 'Ecom Express']);
+    db.query(`SELECT logistics_name FROM logistics ORDER BY logistics_name ASC`, (err, results) => {
+        if (err) {
+            console.error('[Dispatch] ❌ Failed to fetch logistics:', err.message);
+            return res.status(500).json({ error: 'Failed to fetch logistics' });
+        }
+
+        const data = results.map(row => row.logistics_name);
+        console.log('[Dispatch] ✅ Logistics:', data);
+        res.json(data);
+    });
 };
 
-// ✅ GET: Processed By
+// ✅ GET: Processed By — From processed_persons
 exports.getProcessedPersons = (req, res) => {
-    db.query(`SELECT name FROM processed_persons`, (err, results) => {
+    db.query(`SELECT name FROM processed_persons ORDER BY name ASC`, (err, results) => {
         if (err) {
             console.error('[Dispatch] ❌ Failed to fetch processed persons:', err.message);
             return res.status(500).json({ error: 'Failed to fetch processed persons' });
         }
-        const names = results.map(row => row.name);
-        res.json(names);
+
+        const data = results.map(row => row.name);
+        console.log('[Dispatch] ✅ Processed Persons:', data);
+        res.json(data);
     });
 };
 
-// ✅ GET: Product Search
+// ✅ GET: Payment Modes — From payment_mode
+exports.getPaymentModes = (req, res) => {
+    db.query(`SELECT mode_name FROM payment_mode ORDER BY mode_name ASC`, (err, results) => {
+        if (err) {
+            console.error('[Dispatch] ❌ Failed to fetch payment modes:', err.message);
+            return res.status(500).json({ error: 'Failed to fetch payment modes' });
+        }
+
+        const data = results.map(row => row.mode_name);
+        console.log('[Dispatch] ✅ Payment Modes:', data);
+        res.json(data);
+    });
+};
+
+// ✅ GET: Product Search — From dispatch_product
 exports.searchProducts = (req, res) => {
     const query = (req.query.query || '').trim().toLowerCase();
-    if (!query) {
-        console.warn('[Dispatch] ⚠️ Empty query received');
-        return res.json([]);
-    }
+    if (!query) return res.json([]);
 
     const regexPattern = `.*${query.replace(/\s+/g, '[ -_]?')}.*`;
 
     db.query(
-        `SELECT p_id, product_name, product_variant, barcode 
-     FROM dispatch_product 
-     WHERE LOWER(product_name) REGEXP ? OR LOWER(barcode) REGEXP ?`,
+        `SELECT p_id, product_name, product_variant, barcode
+         FROM dispatch_product
+         WHERE LOWER(product_name) REGEXP ? OR LOWER(barcode) REGEXP ?
+         LIMIT 25`,
         [regexPattern, regexPattern],
         (err, results) => {
             if (err) {
                 console.error('[Dispatch] ❌ Product search failed:', err.message);
                 return res.status(500).json({ error: 'Search failed' });
             }
-            console.log('[Dispatch] ✅ Suggestions returned:', results.length);
             res.json(results);
         }
     );
 };
 
-// ✅ GET: Payment Modes
-exports.getPaymentModes = (req, res) => {
-    res.json(['Bank Transfer', 'Cash on Delivery', 'UPI', 'Card']);
-};
-
-// 🚀 POST: Push Dispatch to DB
+// 🚀 POST: Push Dispatch Entry to DB
 exports.pushToDb = async (req, res) => {
-    console.log('[Tracker] pushToDb triggered');
+    console.log('[Dispatch] pushToDb triggered');
 
     try {
         const {
@@ -102,67 +122,42 @@ exports.pushToDb = async (req, res) => {
             products
         } = req.body;
 
-        console.log('[Tracker] Payload received:', {
-            selectedWarehouse,
-            orderRef,
-            customerName,
-            productsCount: Array.isArray(products) ? products.length : 0
-        });
+        if (!selectedWarehouse || !awbNumber)
+            return res.status(400).json({ error: 'Missing required warehouse or AWB number' });
 
-        if (!Array.isArray(products) || products.length === 0) {
-            console.warn('[Tracker] ❌ No products to insert');
+        if (!Array.isArray(products) || products.length === 0)
             return res.status(400).json({ error: 'No products provided' });
-        }
 
-        const warehouseMap = {
-            'Mumbai Warehouse': 'Mumbai_Warehouse',
-            'Hyderabad Warehouse': 'Hyderabad_Warehouse',
-            'Ahmedabad Warehouse': 'Ahmedabad_Warehouse',
-            'Bangalore Warehouse': 'Bangalore_Warehouse',
-            'Gurgaon Warehouse': 'Gurgaon_Warehouse'
-        };
-
-        const tableName = warehouseMap[selectedWarehouse?.trim()];
-        if (!tableName) {
-            console.warn('[Tracker] ❌ Invalid warehouse:', selectedWarehouse);
-            return res.status(400).json({ error: 'Invalid warehouse selected' });
-        }
-
-        console.log('[Tracker] ✅ Target table resolved:', tableName);
+        const tableName = selectedWarehouse.replace(/\s+/g, '_');
+        console.log('[Dispatch] ✅ Target table resolved:', tableName);
 
         // 🔐 AWB Uniqueness Check
         const awbExists = await checkAwbExists(awbNumber?.trim());
         if (awbExists) {
-            console.warn('[Tracker] ❌ AWB already exists globally:', awbNumber);
-            return res.status(400).json({ error: 'AWB already exists. Please provide a valid unique AWB.' });
+            console.warn('[Dispatch] ❌ AWB already exists globally:', awbNumber);
+            return res.status(400).json({ error: 'AWB already exists. Please use a unique AWB.' });
         }
 
+        // 🚀 Insert Products
         const insertPromises = products.map((p, i) => {
             let { name, qty, variant = '', barcode = '' } = p;
-
-            if (!name || !qty) {
-                console.warn(`[Tracker] ⚠️ Skipping product #${i + 1} — missing name/qty`);
-                return Promise.resolve();
-            }
+            if (!name || !qty) return Promise.resolve();
 
             if (!barcode && name.includes('|')) {
                 const parts = name.split('|').map(s => s.trim());
                 barcode = parts[parts.length - 1];
                 name = parts[0];
-                console.log(`[Tracker] 🛠️ Extracted barcode from product_name:`, barcode);
             }
-
-            console.log(`[Tracker] 🚀 Preparing insert for product #${i + 1}:`, name);
 
             return new Promise((resolve, reject) => {
                 db.query(
                     `INSERT INTO \`${tableName}\` (
-            status, warehouse, order_ref, customer,
-            product_name, qty, variant, barcode,
-            awb, logistics, parcel_type,
-            length, width, height, actual_weight,
-            payment_mode, invoice_amount, processed_by, remarks
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                        status, warehouse, order_ref, customer,
+                        product_name, qty, variant, barcode,
+                        awb, logistics, parcel_type,
+                        length, width, height, actual_weight,
+                        payment_mode, invoice_amount, processed_by, remarks, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
                     [
                         'Pending',
                         selectedWarehouse,
@@ -186,36 +181,44 @@ exports.pushToDb = async (req, res) => {
                     ],
                     (err, result) => {
                         if (err) {
-                            console.error(`[Tracker] ❌ DB insert failed for product #${i + 1}:`, err.message);
+                            console.error(`[Dispatch] ❌ DB insert failed for product #${i + 1}:`, err.message);
                             return reject(err);
                         }
-                        console.log(`[Tracker] ✅ Inserted product #${i + 1}:`, name);
+                        console.log(`[Dispatch] ✅ Inserted product #${i + 1}: ${name}`);
                         resolve(result);
-
-                        if (tableName === 'Gurgaon_Warehouse') {
-                            db.query(
-                                `UPDATE gurgaon_inventory SET stock = stock - ? WHERE code = ? AND warehouse = 'Gurgon'`,
-                                [qty, barcode],
-                                (err2, result2) => {
-                                    if (err2) {
-                                        console.error(`[Tracker] ❌ Stock mutation failed for ${barcode}:`, err2.message);
-                                    } else {
-                                        console.log(`[Tracker] ✅ Stock reduced for ${barcode}: -${qty}`);
-                                    }
-                                }
-                            );
-                        }
                     }
                 );
             });
         });
 
         await Promise.all(insertPromises);
-        console.log('[Tracker] ✅ All inserts completed successfully');
+        console.log('[Dispatch] ✅ All inserts completed successfully');
         res.status(200).json({ success: true, message: 'Dispatch entry submitted successfully' });
 
     } catch (err) {
-        console.error('[Tracker] ❌ Dispatch insert failed:', err.message);
+        console.error('[Dispatch] ❌ Dispatch insert failed:', err.message);
         res.status(500).json({ error: 'Dispatch insert failed' });
+    }
+};
+
+// 🔁 POST: Update Dispatch Status
+exports.updateStatus = async (req, res) => {
+    const { awb, warehouse } = req.body;
+    if (!awb || !warehouse) return res.status(400).json({ error: 'Missing AWB or warehouse' });
+
+    const tableName = warehouse.replace(/\s+/g, '_');
+    try {
+        const sql = `UPDATE \`${tableName}\` SET status = 'Dispatched' WHERE awb = ?`;
+        db.query(sql, [awb], (err) => {
+            if (err) {
+                console.error('[Dispatch] ❌ Failed to update status:', err.message);
+                return res.status(500).json({ error: 'Failed to update status' });
+            }
+            console.log(`[Dispatch] ✅ AWB ${awb} marked as Dispatched`);
+            res.status(200).json({ success: true, message: 'Status updated successfully' });
+        });
+    } catch (err) {
+        console.error('[Dispatch] ❌ Status update failed:', err.message);
+        res.status(500).json({ error: 'Unexpected error while updating status' });
     }
 };

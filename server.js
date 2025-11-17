@@ -1,66 +1,86 @@
-const express = require('express');
-const cors = require('cors');
+require("dotenv").config({ path: "/home/ubuntu/inventory-backendtest/.env" });
+
+const express = require("express");
+const cors = require("cors");
+const morgan = require("morgan");
 const app = express();
 
+// ✅ Allowed frontend origins
+const allowedOrigins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "https://inventory-a78le31ss-test-tests-projects-d6b8ba0b.vercel.app",
+    "https://13-201-222-24.nip.io",
+];
 
-// 🛡️ Global Middleware
-app.use(cors()); // ✅ Enable CORS for cross-origin requests
-app.use(express.json({ limit: '10mb' })); // ✅ Parse incoming JSON payloads
-app.use(express.urlencoded({ extended: true, limit: '10mb' })); // ✅ Handle form data
+// ✅ CORS Configuration
+app.use(
+    cors({
+        origin: function (origin, callback) {
+            if (!origin) return callback(null, true);
+            if (allowedOrigins.includes(origin)) return callback(null, true);
+            console.warn(`[CORS] ❌ Blocked request from: ${origin}`);
+            return callback(new Error("Not allowed by CORS"));
+        },
+        credentials: true,
+        methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allowedHeaders: ["Content-Type", "Authorization"],
+    })
+);
 
-// 📦 Route Imports
-const dispatchRoutes = require('./routes/dispatchRoutes');       // 🚚 Dispatch logic
-const statusRoutes = require('./routes/statusRoutes');           // 📊 Status tracking
-const inventoryRoutes = require('./routes/inventoryRoutes');     // 📦 Inventory insert/fetch
-const productRoutes = require('./routes/productRoutes');         // 🔍 Product search + inventory filter
-const returnRoutes = require('./routes/returnRoutes');           // 🔁 Return form submission
-const damageRoutes = require('./routes/DamageRouter');           // 🛠️ Damage/Recovery entry
-const ordersheetRoutes = require('./routes/ordersheet.routes');  // 🧾 Dropdown data + warehouse filter
-const trackerRoutes = require('./routes/trackerRoutes');         // 📦 Barcode-based product tracking
-// ❌ Removed: const trackingRoutes = require('./routes/tracking'); // 📦 AWB tracking via Delhivery
+// ✅ Core Middleware
+app.use(express.json({ limit: "10mb" }));
+app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+app.use(morgan("dev"));
 
-// 🚦 Route Mounts
-app.use('/api/dispatch', dispatchRoutes);       // 🔗 Mount dispatch routes
-app.use('/api/status', statusRoutes);           // 🔗 Mount status routes
-app.use('/api/inventory', inventoryRoutes);     // 🔗 Mount inventory insert/fetch routes
-app.use('/api/products', productRoutes);        // 🔗 Mount product search + inventory filter routes
-app.use('/api/returns', returnRoutes);          // 🔗 Mount return form submission route
-app.use('/api/damage', damageRoutes);           // 🔗 Mount damage/recovery entry route
-app.use('/api', ordersheetRoutes);              // ✅ Mount dropdown + warehouse filter endpoints
-app.use('/api', trackerRoutes);                 // ✅ Mount barcode-based tracking route
-// ❌ Removed: app.use('/api', trackingRoutes);  // ✅ Mount AWB tracking route
+// ✅ Database Connection
+require("./db/connection");
 
-// 🔔 TrackingMore Webhook Handler
-app.post('/webhook/trackingmore', (req, res) => {
-    const receivedSecret = req.headers['x-trackingmore-secret'];
-    const expectedSecret = 'dHmto3s7s7g7s7g7s7g7s7g7s7g7s7g7'; // 🔐 Replace with your actual secret
+// ---------------------------------------------
+// ORIGINAL ROUTES (UNTOUCHED)
+// ---------------------------------------------
+app.use("/api/dispatch", require("./routes/dispatchRoutes"));
+app.use("/api/status", require("./routes/statusRoutes"));
+app.use("/api/inventory", require("./routes/inventoryRoutes"));
+app.use("/api/products", require("./routes/productRoutes"));
+app.use("/api/returns", require("./routes/returnRoutes"));
+app.use("/api/damage", require("./routes/DamageRouter"));
+app.use("/api", require("./routes/ordersheet.routes"));
+app.use("/api", require("./routes/trackerRoutes")); // ⚠️ barcode wala route
 
-    if (receivedSecret !== expectedSecret) {
-        console.warn('[Webhook] ❌ Invalid secret received');
-        return res.status(403).send('Forbidden');
-    }
+// ---------------------------------------------
+// 🟦 ADD HOCKEY TRACKING ROUTER
+// ---------------------------------------------
+app.use("/api/hockey", require("./routes/hockeyrouter"));
 
-    console.log('[Webhook] ✅ Payload received:', req.body);
-    res.status(200).send('OK');
+//   Final working URL →  /api/hockey/track/:awb
+// ---------------------------------------------
+
+// ✅ Health Check
+app.get("/", (req, res) => {
+    res.json({
+        status: "✅ OK",
+        message: "Dispatch backend is live and healthy",
+        timestamp: new Date().toISOString(),
+        database: process.env.DB_NAME,
+        server: req.hostname,
+    });
 });
 
-// 🧪 Health Check Endpoint
-app.get('/', (req, res) => {
-    res.send('✅ Dispatch backend is live'); // 🧠 Quick sanity check
+// ⚠️ Global Error Handler
+app.use((err, req, res, next) => {
+    console.error("[Error Handler] ❌", err.message);
+    res.status(500).json({ error: err.message });
 });
 
-// 🚀 Server Boot
-const PORT = 5000;
-app.listen(PORT, () => {
-    console.log('[DispatchRoutes] ✅ Dispatch routes loaded');
-    console.log('[StatusRoutes] ✅ Status routes loaded');
-    console.log('[InventoryRoutes] ✅ Inventory routes loaded');
-    console.log('[ProductRoutes] ✅ Product routes loaded');
-    console.log('[ReturnRoutes] ✅ Return routes loaded');
-    console.log('[DamageRoutes] ✅ Damage/Recovery routes loaded');
-    console.log('[OrderSheetRoutes] ✅ Dropdown + warehouse filter routes loaded');
-    console.log('[TrackerRoutes] ✅ Barcode-based tracking route loaded');
-    // ❌ Removed: console.log('[TrackingRoutes] ✅ AWB tracking route loaded');
-    console.log('[Webhook] ✅ TrackingMore webhook route loaded');
-    console.log(`[Backend] ✅ Running on http://localhost:${PORT}`);
+// 🚀 Start Server
+const PORT = process.env.PORT || 5000;
+const HOST = "0.0.0.0";
+
+app.listen(PORT, HOST, () => {
+    console.log("=============================================");
+    console.log("[Backend] ✅ Server Started Successfully");
+    console.log(`[Backend] 🌍 Local: http://localhost:${PORT}`);
+    console.log(`[Backend] 🌐 Public (AWS HTTPS): https://13-201-222-24.nip.io`);
+    console.log("=============================================");
 });

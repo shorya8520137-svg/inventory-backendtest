@@ -1,12 +1,12 @@
 const db = require('../db/connection'); // ✅ MySQL connection
 
 /**
- * 🔍 Product search
+ * 🔍 Search Products (Autocomplete)
  */
 const searchProducts = (req, res) => {
     const { query } = req.query;
 
-    if (!query || query.trim() === '') {
+    if (!query || !query.trim()) {
         console.warn('[ProductController] ⚠️ Empty query received');
         return res.json([]);
     }
@@ -22,30 +22,30 @@ const searchProducts = (req, res) => {
 
     db.query(sql, values, (err, results) => {
         if (err) {
-            console.error('[ProductController] ❌ Suggestion fetch failed:', err.message);
-            return res.status(500).json({ error: err.message });
+            console.error('[ProductController] ❌ Product search failed:', err.message);
+            return res.status(500).json({ error: 'Database query failed' });
         }
 
-        const suggestions = results.map(row => ({
-            p_id: row.p_id,
-            product_name: row.product_name,
-            product_variant: row.product_variant,
-            barcode: row.barcode
+        const suggestions = results.map((r) => ({
+            p_id: r.p_id,
+            product_name: r.product_name,
+            product_variant: r.product_variant,
+            barcode: r.barcode,
         }));
 
-        console.log('[ProductController] ✅ Suggestions returned:', suggestions.length);
+        console.log(`[ProductController] ✅ ${suggestions.length} product suggestions`);
         res.json(suggestions);
     });
 };
 
 /**
- * 📦 Filter inventory
+ * 📦 Filter Inventory by Date & Product
  */
 const filterInventory = (req, res) => {
     const { table, date, product } = req.query;
 
     if (!table || !date) {
-        console.warn('[ProductController] ❌ Missing table or date');
+        console.warn('[ProductController] ⚠️ Missing table or date');
         return res.status(400).json({ error: 'Missing table or date' });
     }
 
@@ -54,7 +54,7 @@ const filterInventory = (req, res) => {
         'hyderabad_inventory',
         'mumbai_inventory',
         'ahmedabad_inventory',
-        'bangalore_inventory'
+        'bangalore_inventory',
     ];
 
     if (!allowedTables.includes(table)) {
@@ -70,26 +70,26 @@ const filterInventory = (req, res) => {
     const params = [date];
 
     if (product && product.trim() !== '') {
-        sql += ` AND LOWER(product) LIKE ? AND code LIKE ?`;
-        params.push(`%${product.toLowerCase()}%`, `%${product}%`);
+        sql += ` AND (LOWER(product) LIKE ? OR LOWER(code) LIKE ?)`;
+        const p = `%${product.toLowerCase()}%`;
+        params.push(p, p);
     }
 
-    console.log('[ProductController] 🔍 SQL:', sql);
-    console.log('[ProductController] 🔍 Params:', params);
+    console.log('[ProductController] 🔍 Executing Filter Query:', sql, params);
 
     db.query(sql, params, (err, results) => {
         if (err) {
-            console.error('[ProductController] ❌ Query failed:', err.message);
-            return res.status(500).json({ error: err.message });
+            console.error('[ProductController] ❌ Inventory filter query failed:', err.message);
+            return res.status(500).json({ error: 'Database query failed' });
         }
 
-        console.log(`[ProductController] ✅ ${results.length} records fetched from ${table}`);
+        console.log(`[ProductController] ✅ ${results.length} rows fetched from ${table}`);
         res.status(200).json(results);
     });
 };
 
 /**
- * 📂 Load full inventory without filters
+ * 📂 Get All Inventory (Unfiltered)
  */
 const getAllInventory = (req, res) => {
     const { table } = req.query;
@@ -99,7 +99,7 @@ const getAllInventory = (req, res) => {
         'hyderabad_inventory',
         'mumbai_inventory',
         'ahmedabad_inventory',
-        'bangalore_inventory'
+        'bangalore_inventory',
     ];
 
     if (!table || !allowedTables.includes(table)) {
@@ -115,17 +115,17 @@ const getAllInventory = (req, res) => {
 
     db.query(sql, (err, results) => {
         if (err) {
-            console.error('[ProductController] ❌ Full inventory fetch failed:', err.message);
-            return res.status(500).json({ error: err.message });
+            console.error('[ProductController] ❌ Inventory fetch failed:', err.message);
+            return res.status(500).json({ error: 'Database query failed' });
         }
 
-        console.log(`[ProductController] ✅ ${results.length} records loaded from ${table}`);
+        console.log(`[ProductController] ✅ Loaded ${results.length} records from ${table}`);
         res.status(200).json(results);
     });
 };
 
 /**
- * 🧩 Track product movement
+ * 🧩 Track Product Movement (Dispatch / Damage / Return / Recover)
  */
 const trackProduct = (req, res) => {
     const { barcode, warehouse } = req.query;
@@ -141,7 +141,7 @@ const trackProduct = (req, res) => {
         bangalore: 'Bangalore_Warehouse',
         gurgaon: 'Gurgaon_Warehouse',
         hyderabad: 'Hyderabad_Warehouse',
-        mumbai: 'Mumbai_Warehouse'
+        mumbai: 'Mumbai_Warehouse',
     };
 
     const inventoryTables = {
@@ -149,7 +149,7 @@ const trackProduct = (req, res) => {
         bangalore: 'bangalore_inventory',
         gurgaon: 'gurgaon_inventory',
         hyderabad: 'hyderabad_inventory',
-        mumbai: 'mumbai_inventory'
+        mumbai: 'mumbai_inventory',
     };
 
     const dispatchTable = warehouseTables[warehouseKey];
@@ -160,6 +160,7 @@ const trackProduct = (req, res) => {
         return res.status(400).json({ error: 'Invalid warehouse name' });
     }
 
+    // Step 1: Fetch Inventory Data
     db.query(
         `SELECT code AS barcode, stock, \`return\` AS returnQty, updated_at, warehouse
          FROM ${inventoryTable}
@@ -167,14 +168,17 @@ const trackProduct = (req, res) => {
         [barcode, warehouse],
         (err, inventoryRows) => {
             if (err) {
-                console.error('[trackProduct] ❌ Inventory fetch failed:', err.message);
-                return res.status(500).json({ error: err.message });
+                console.error('[ProductController] ❌ Inventory fetch failed:', err.message);
+                return res.status(500).json({ error: 'Database query failed' });
             }
 
             if (inventoryRows.length === 0) {
-                return res.status(404).json({ error: 'Barcode not found in inventory for this warehouse' });
+                return res.status(404).json({
+                    error: 'Barcode not found in inventory for this warehouse',
+                });
             }
 
+            // Step 2: Fetch Dispatch Data
             db.query(
                 `SELECT awb, barcode, product_name, qty, processed_by, created_at, warehouse
                  FROM ${dispatchTable}
@@ -183,10 +187,11 @@ const trackProduct = (req, res) => {
                 [barcode, warehouse],
                 (err, dispatchRows) => {
                     if (err) {
-                        console.error('[trackProduct] ❌ Dispatch fetch failed:', err.message);
-                        return res.status(500).json({ error: err.message });
+                        console.error('[ProductController] ❌ Dispatch fetch failed:', err.message);
+                        return res.status(500).json({ error: 'Database query failed' });
                     }
 
+                    // Step 3: Fetch Damage / Recover Logs
                     db.query(
                         `SELECT action_type, quantity, timestamp
                          FROM ${damageTable}
@@ -195,22 +200,26 @@ const trackProduct = (req, res) => {
                         [barcode, warehouseKey],
                         (err, damageRows) => {
                             if (err) {
-                                console.error('[trackProduct] ❌ Damage fetch failed:', err.message);
-                                return res.status(500).json({ error: err.message });
+                                console.error('[ProductController] ❌ Damage log fetch failed:', err.message);
+                                return res.status(500).json({ error: 'Database query failed' });
                             }
 
+                            // Step 4: Totals calculation
                             const totalDispatch = dispatchRows.reduce((sum, r) => sum + (r.qty || 0), 0);
                             const totalStock = inventoryRows[0]?.stock || 0;
                             const totalReturn = inventoryRows[0]?.returnQty || 0;
 
                             let totalDamage = 0, totalRecover = 0;
-                            damageRows.forEach(row => {
-                                if (row.action_type?.toLowerCase() === 'damage') totalDamage += row.quantity || 0;
-                                if (row.action_type?.toLowerCase() === 'recover') totalRecover += row.quantity || 0;
-                            });
+                            for (const row of damageRows) {
+                                const type = row.action_type?.toLowerCase();
+                                if (type === 'damage') totalDamage += row.quantity || 0;
+                                if (type === 'recover') totalRecover += row.quantity || 0;
+                            }
 
-                            const finalStock = totalStock - totalDispatch + totalReturn - totalDamage + totalRecover;
+                            const finalStock =
+                                totalStock - totalDispatch + totalReturn - totalDamage + totalRecover;
 
+                            // Step 5: Group Dispatch by AWB
                             const dispatchByAWB = dispatchRows.reduce((acc, row) => {
                                 const awbKey = row.awb || 'No AWB';
                                 if (!acc[awbKey]) acc[awbKey] = [];
@@ -218,6 +227,7 @@ const trackProduct = (req, res) => {
                                 return acc;
                             }, {});
 
+                            // ✅ Response
                             res.json({
                                 barcode,
                                 warehouse,
@@ -227,13 +237,13 @@ const trackProduct = (req, res) => {
                                     return: totalReturn,
                                     damage: totalDamage,
                                     recover: totalRecover,
-                                    finalStock
+                                    finalStock,
                                 },
                                 details: {
+                                    inventory: inventoryRows,
                                     dispatch: dispatchByAWB,
                                     damageRecovery: damageRows,
-                                    inventory: inventoryRows
-                                }
+                                },
                             });
                         }
                     );
@@ -247,6 +257,6 @@ const trackProduct = (req, res) => {
 module.exports = {
     searchProducts,
     filterInventory,
+    getAllInventory,
     trackProduct,
-    getAllInventory // ✅ Injected
 };

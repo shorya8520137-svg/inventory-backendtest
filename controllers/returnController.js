@@ -1,58 +1,79 @@
+/**
+ * 📦 Return Controller
+ * Handles return entries and automatic inventory restocking
+ */
+
 const db = require('../db/connection');
 
 exports.submitReturnEntry = async (req, res) => {
-    console.log('[ReturnController] 🔥 Triggered with:', req.body);
+    console.log('[ReturnController] 🚀 Triggered with payload:', req.body);
 
-    const { orderRef, awb, productType, inventory, quantity } = req.body;
+    try {
+        const { orderRef, awb, productType, inventory, quantity } = req.body;
 
-    if (!orderRef || !awb || !productType || !inventory || !quantity) {
-        console.warn('[ReturnController] ⚠️ Missing fields:', {
-            orderRef, awb, productType, inventory, quantity
-        });
-        return res.status(400).json({ error: 'Missing required fields' });
-    }
-
-    const qty = parseInt(quantity);
-
-    const inventoryMap = {
-        ahmedabad: 'ahmedabad_inventory',
-        bangalore: 'bangalore_inventory',
-        gurgaon: 'gurgaon_inventory',
-        hyderabad: 'hyderabad_inventory',
-        mumbai: 'mumbai_inventory'
-    };
-
-    const inventoryKey = inventory.toLowerCase();
-    const inventoryTable = inventoryMap[inventoryKey];
-
-    if (!inventoryTable) {
-        console.warn('[ReturnController] ❌ Unknown inventory:', inventory);
-        return res.status(400).json({ error: 'Unknown inventory location' });
-    }
-
-    // ✅ Extract product name and barcode
-    const [rawName, rawBarcode] = productType.split(/–|—/).map(s => s.trim());
-    const productName = rawName.replace(/\s+/g, ' ').replace(/\u00A0|\u200B|\uFEFF/g, '');
-    const barcode = rawBarcode?.replace(/\s+/g, '').replace(/\u00A0|\u200B|\uFEFF/g, '');
-
-    console.log('[ReturnController] 🧪 Product name:', productName);
-    console.log('[ReturnController] 🧪 Barcode:', barcode);
-
-    // ✅ Step 1: Insert into returns table (audit trail)
-    const insertQuery = `
-        INSERT INTO returns (order_ref, awb, product_type, barcode, inventory, quantity, submitted_at)
-        VALUES (?, ?, ?, ?, ?, ?, NOW())
-    `;
-    const insertValues = [orderRef, awb, productName, barcode, inventoryKey, qty];
-
-    db.execute(insertQuery, insertValues, (err) => {
-        if (err) {
-            console.error('[ReturnController] ❌ Insert Error:', err);
-            return res.status(500).json({ error: 'Internal server error' });
+        // 🧩 Validate all fields
+        if (!orderRef || !awb || !productType || !inventory || !quantity) {
+            console.warn('[ReturnController] ⚠️ Missing required fields:', {
+                orderRef, awb, productType, inventory, quantity
+            });
+            return res.status(400).json({
+                success: false,
+                error: 'Missing required fields',
+                missing: { orderRef, awb, productType, inventory, quantity }
+            });
         }
-        console.log('[ReturnController] ✅ Return entry inserted');
 
-        // ✅ Step 2: Update inventory
+        const qty = parseInt(quantity, 10);
+        if (isNaN(qty) || qty <= 0) {
+            return res.status(400).json({ success: false, error: 'Invalid quantity' });
+        }
+
+        // 🧠 Normalize inventory location
+        const inventoryMap = {
+            ahmedabad: 'ahmedabad_inventory',
+            bangalore: 'bangalore_inventory',
+            gurgaon: 'gurgaon_inventory',
+            hyderabad: 'hyderabad_inventory',
+            mumbai: 'mumbai_inventory'
+        };
+
+        const inventoryKey = inventory.trim().toLowerCase();
+        const inventoryTable = inventoryMap[inventoryKey];
+
+        if (!inventoryTable) {
+            console.warn('[ReturnController] ❌ Unknown inventory:', inventory);
+            return res.status(400).json({ success: false, error: 'Invalid inventory location' });
+        }
+
+        // 🧼 Clean up productType and extract product + barcode
+        const [rawName, rawBarcode] = productType.split(/–|—/).map(s => s.trim());
+        const productName = rawName
+            ?.replace(/\s+/g, ' ')
+            ?.replace(/[\u00A0\u200B\uFEFF]/g, '')
+            ?.trim();
+        const barcode = rawBarcode
+            ?.replace(/\s+/g, '')
+            ?.replace(/[\u00A0\u200B\uFEFF]/g, '')
+            ?.trim();
+
+        if (!barcode) {
+            console.warn('[ReturnController] ⚠️ Barcode missing or malformed:', productType);
+            return res.status(400).json({ success: false, error: 'Invalid product format' });
+        }
+
+        console.log('[ReturnController] 🧪 Cleaned product:', { productName, barcode });
+
+        // ✅ Step 1: Insert into returns table
+        const insertQuery = `
+            INSERT INTO returns (order_ref, awb, product_type, barcode, inventory, quantity, submitted_at)
+            VALUES (?, ?, ?, ?, ?, ?, NOW())
+        `;
+        const insertValues = [orderRef, awb, productName, barcode, inventoryKey, qty];
+
+        const [insertResult] = await db.promise().execute(insertQuery, insertValues);
+        console.log('[ReturnController] ✅ Return entry inserted:', insertResult.insertId);
+
+        // ✅ Step 2: Update corresponding inventory
         const updateQuery = `
             UPDATE ${inventoryTable}
             SET stock = stock + ?, \`return\` = \`return\` + ?
@@ -60,14 +81,39 @@ exports.submitReturnEntry = async (req, res) => {
         `;
         const updateValues = [qty, qty, barcode];
 
-        db.execute(updateQuery, updateValues, (err, updateResult) => {
-            if (err) {
-                console.error('[ReturnController] ❌ Inventory update failed:', err);
-                return res.status(500).json({ error: 'Inventory update failed' });
-            }
+        const [updateResult] = await db.promise().execute(updateQuery, updateValues);
 
-            console.log('[ReturnController] 🔧 Inventory updated:', updateResult);
-            res.status(200).json({ message: 'Return processed and inventory updated successfully' });
+        if (updateResult.affectedRows === 0) {
+            console.warn('[ReturnController] ⚠️ No matching inventory row found for barcode:', barcode);
+            return res.status(404).json({
+                success: false,
+                message: `No inventory record found for barcode: ${barcode}`
+            });
+        }
+
+        console.log('[ReturnController] 🔧 Inventory successfully updated:', {
+            table: inventoryTable,
+            affectedRows: updateResult.affectedRows
         });
-    });
+
+        return res.status(200).json({
+            success: true,
+            message: '✅ Return processed and inventory updated successfully',
+            data: {
+                orderRef,
+                awb,
+                product: productName,
+                barcode,
+                inventory: inventoryKey,
+                quantity: qty
+            }
+        });
+    } catch (err) {
+        console.error('[ReturnController] ❌ Internal Error:', err);
+        return res.status(500).json({
+            success: false,
+            error: 'Internal server error',
+            details: err.message
+        });
+    }
 };
