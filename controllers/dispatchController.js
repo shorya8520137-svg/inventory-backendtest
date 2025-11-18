@@ -23,63 +23,47 @@ const checkAwbExists = async (awb) => {
     });
 };
 
-// ✅ GET: Warehouses — From dispatch_warehouse
+// ✅ GET: Warehouses
 exports.getWarehouses = (req, res) => {
     db.query(`SELECT warehouse_name FROM dispatch_warehouse ORDER BY warehouse_name ASC`, (err, results) => {
-        if (err) {
-            console.error('[Dispatch] ❌ Failed to fetch warehouses:', err.message);
-            return res.status(500).json({ error: 'Failed to fetch warehouses' });
-        }
+        if (err) return res.status(500).json({ error: 'Failed to fetch warehouses' });
 
         const data = results.map(row => row.warehouse_name);
-        console.log('[Dispatch] ✅ Warehouses:', data);
         res.json(data);
     });
 };
 
-// ✅ GET: Logistics Partners — From logistics
+// ✅ GET Logistics
 exports.getLogistics = (req, res) => {
-    db.query(`SELECT logistics_name FROM logistics ORDER BY logistics_name ASC`, (err, results) => {
-        if (err) {
-            console.error('[Dispatch] ❌ Failed to fetch logistics:', err.message);
-            return res.status(500).json({ error: 'Failed to fetch logistics' });
-        }
-
-        const data = results.map(row => row.logistics_name);
-        console.log('[Dispatch] ✅ Logistics:', data);
-        res.json(data);
-    });
-};
-
-// ✅ GET: Processed By — From processed_persons
-exports.getProcessedPersons = (req, res) => {
-    db.query(`SELECT name FROM processed_persons ORDER BY name ASC`, (err, results) => {
-        if (err) {
-            console.error('[Dispatch] ❌ Failed to fetch processed persons:', err.message);
-            return res.status(500).json({ error: 'Failed to fetch processed persons' });
-        }
+    db.query(`SELECT name FROM logistics ORDER BY name ASC`, (err, results) => {
+        if (err) return res.status(500).json({ error: 'Failed to fetch logistics' });
 
         const data = results.map(row => row.name);
-        console.log('[Dispatch] ✅ Processed Persons:', data);
         res.json(data);
     });
 };
 
-// ✅ GET: Payment Modes — From payment_mode
+// ✅ GET: Processed Persons
+exports.getProcessedPersons = (req, res) => {
+    db.query(`SELECT name FROM processed_persons ORDER BY name ASC`, (err, results) => {
+        if (err) return res.status(500).json({ error: 'Failed to fetch processed persons' });
+
+        const data = results.map(row => row.name);
+        res.json(data);
+    });
+};
+
+// ✅ GET: Payment Modes
 exports.getPaymentModes = (req, res) => {
     db.query(`SELECT mode_name FROM payment_mode ORDER BY mode_name ASC`, (err, results) => {
-        if (err) {
-            console.error('[Dispatch] ❌ Failed to fetch payment modes:', err.message);
-            return res.status(500).json({ error: 'Failed to fetch payment modes' });
-        }
+        if (err) return res.status(500).json({ error: 'Failed to fetch payment modes' });
 
         const data = results.map(row => row.mode_name);
-        console.log('[Dispatch] ✅ Payment Modes:', data);
         res.json(data);
     });
 };
 
-// ✅ GET: Product Search — From dispatch_product
+// ✅ SEARCH Products
 exports.searchProducts = (req, res) => {
     const query = (req.query.query || '').trim().toLowerCase();
     if (!query) return res.json([]);
@@ -93,16 +77,13 @@ exports.searchProducts = (req, res) => {
          LIMIT 25`,
         [regexPattern, regexPattern],
         (err, results) => {
-            if (err) {
-                console.error('[Dispatch] ❌ Product search failed:', err.message);
-                return res.status(500).json({ error: 'Search failed' });
-            }
+            if (err) return res.status(500).json({ error: 'Search failed' });
             res.json(results);
         }
     );
 };
 
-// 🚀 POST: Push Dispatch Entry to DB
+// 🚀 INSERT + AUTO-LESS: Push Dispatch Entry
 exports.pushToDb = async (req, res) => {
     console.log('[Dispatch] pushToDb triggered');
 
@@ -129,16 +110,24 @@ exports.pushToDb = async (req, res) => {
             return res.status(400).json({ error: 'No products provided' });
 
         const tableName = selectedWarehouse.replace(/\s+/g, '_');
-        console.log('[Dispatch] ✅ Target table resolved:', tableName);
 
-        // 🔐 AWB Uniqueness Check
+        // 🔐 AWB Check
         const awbExists = await checkAwbExists(awbNumber?.trim());
         if (awbExists) {
-            console.warn('[Dispatch] ❌ AWB already exists globally:', awbNumber);
             return res.status(400).json({ error: 'AWB already exists. Please use a unique AWB.' });
         }
 
-        // 🚀 Insert Products
+        // 🗂️ Inventory table map
+        const inventoryMap = {
+            "Gurgaon Warehouse": "gurgaon_inventory",
+            "Hyderabad Warehouse": "hyderabad_inventory",
+            "Mumbai Warehouse": "mumbai_inventory",
+            "Ahmedabad Warehouse": "ahmedabad_inventory",
+            "Bangalore Warehouse": "bangalore_inventory"
+        };
+        const inventoryTable = inventoryMap[selectedWarehouse];
+
+        // 🚀 INSERT EACH PRODUCT + AUTO-LESS
         const insertPromises = products.map((p, i) => {
             let { name, qty, variant = '', barcode = '' } = p;
             if (!name || !qty) return Promise.resolve();
@@ -156,7 +145,7 @@ exports.pushToDb = async (req, res) => {
                         product_name, qty, variant, barcode,
                         awb, logistics, parcel_type,
                         length, width, height, actual_weight,
-                        payment_mode, invoice_amount, processed_by, remarks, created_at
+                        payment_mode, invoice_amount, processed_by, remarks, timestamp
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
                     [
                         'Pending',
@@ -180,11 +169,27 @@ exports.pushToDb = async (req, res) => {
                         remarks
                     ],
                     (err, result) => {
-                        if (err) {
-                            console.error(`[Dispatch] ❌ DB insert failed for product #${i + 1}:`, err.message);
-                            return reject(err);
-                        }
+                        if (err) return reject(err);
+
                         console.log(`[Dispatch] ✅ Inserted product #${i + 1}: ${name}`);
+
+                        // 🔥 AUTO-LESS INVENTORY
+                        if (inventoryTable && barcode) {
+                            db.query(
+                                `UPDATE \`${inventoryTable}\`
+                                 SET stock = stock - ?
+                                 WHERE code = ?`,
+                                [qty, barcode],
+                                (invErr) => {
+                                    if (invErr) {
+                                        console.error(`[Inventory] ❌ Failed to reduce stock for ${barcode}:`, invErr.message);
+                                    } else {
+                                        console.log(`[Inventory] ✅ Stock reduced for ${barcode} by ${qty}`);
+                                    }
+                                }
+                            );
+                        }
+
                         resolve(result);
                     }
                 );
@@ -192,7 +197,7 @@ exports.pushToDb = async (req, res) => {
         });
 
         await Promise.all(insertPromises);
-        console.log('[Dispatch] ✅ All inserts completed successfully');
+        console.log('[Dispatch] ✅ All inserts + inventory auto-less completed');
         res.status(200).json({ success: true, message: 'Dispatch entry submitted successfully' });
 
     } catch (err) {
@@ -201,24 +206,21 @@ exports.pushToDb = async (req, res) => {
     }
 };
 
-// 🔁 POST: Update Dispatch Status
+// 🔁 UPDATE STATUS
 exports.updateStatus = async (req, res) => {
     const { awb, warehouse } = req.body;
     if (!awb || !warehouse) return res.status(400).json({ error: 'Missing AWB or warehouse' });
 
     const tableName = warehouse.replace(/\s+/g, '_');
+
     try {
         const sql = `UPDATE \`${tableName}\` SET status = 'Dispatched' WHERE awb = ?`;
         db.query(sql, [awb], (err) => {
-            if (err) {
-                console.error('[Dispatch] ❌ Failed to update status:', err.message);
-                return res.status(500).json({ error: 'Failed to update status' });
-            }
-            console.log(`[Dispatch] ✅ AWB ${awb} marked as Dispatched`);
+            if (err) return res.status(500).json({ error: 'Failed to update status' });
+
             res.status(200).json({ success: true, message: 'Status updated successfully' });
         });
     } catch (err) {
-        console.error('[Dispatch] ❌ Status update failed:', err.message);
         res.status(500).json({ error: 'Unexpected error while updating status' });
     }
 };
