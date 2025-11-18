@@ -46,17 +46,24 @@ app.use("/api/products", require("./routes/productRoutes"));
 app.use("/api/returns", require("./routes/returnRoutes"));
 app.use("/api/damage", require("./routes/DamageRouter"));
 app.use("/api", require("./routes/ordersheet.routes"));
-app.use("/api", require("./routes/trackerRoutes")); // ⚠️ barcode wala route
+app.use("/api", require("./routes/trackerRoutes")); // barcode wala route
 
 // ---------------------------------------------
-// 🟦 ADD HOCKEY TRACKING ROUTER
+// 🟦 EXISTING HOCKEY TRACKING ROUTER
 // ---------------------------------------------
 app.use("/api/hockey", require("./routes/hockeyrouter"));
+// URL → /api/hockey/track/:awb
 
-//   Final working URL →  /api/hockey/track/:awb
 // ---------------------------------------------
+// 🟩 NEW MAP TRACKING ROUTES (ADDED)
+// ---------------------------------------------
+app.use("/api/map", require("./routes/map"));
+// URL → /api/map/track?awbs=111,222
+// URL → /api/map/markers
 
-// ✅ Health Check
+// ---------------------------------------------
+// HEALTH CHECK
+// ---------------------------------------------
 app.get("/", (req, res) => {
     res.json({
         status: "✅ OK",
@@ -67,13 +74,17 @@ app.get("/", (req, res) => {
     });
 });
 
-// ⚠️ Global Error Handler
+// ---------------------------------------------
+// GLOBAL ERROR HANDLER
+// ---------------------------------------------
 app.use((err, req, res, next) => {
     console.error("[Error Handler] ❌", err.message);
     res.status(500).json({ error: err.message });
 });
 
-// 🚀 Start Server
+// ---------------------------------------------
+// SERVER START
+// ---------------------------------------------
 const PORT = process.env.PORT || 5000;
 const HOST = "0.0.0.0";
 
