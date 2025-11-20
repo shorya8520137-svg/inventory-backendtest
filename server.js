@@ -12,7 +12,7 @@ const allowedOrigins = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
     "https://inventory-a78le31ss-test-tests-projects-d6b8ba0b.vercel.app",
-    "https://inventory-7r662qhwr-test-tests-projects-d6b8ba0b.vercel.app", // ⭐ NEW
+    "https://inventory-7r662qhwr-test-tests-projects-d6b8ba0b.vercel.app",
     "https://13-201-222-24.nip.io",
 ];
 
@@ -58,18 +58,14 @@ app.use("/api/damage", require("./routes/DamageRouter"));
 app.use("/api", require("./routes/ordersheet.routes"));
 app.use("/api", require("./routes/trackerRoutes")); // barcode tracking
 
-// =============================================
-// 🟦 Existing Hockey Tracking Router
-// URL → /api/hockey/track/:awb
-// =============================================
+// 🟦 Hockey Tracker
 app.use("/api/hockey", require("./routes/hockeyrouter"));
 
-// =============================================
-// 🟩 NEW MAP TRACKING ROUTES
-// URL → /api/map/track?awbs=111,222
-// URL → /api/map/markers
-// =============================================
+// 🟩 Map Tracking
 app.use("/api/map", require("./routes/map"));
+
+// ⭐ NEW — DASHBOARD ROUTES (Total stock, pending, invoices, payment, etc.)
+app.use("/api/dashboard", require("./routes/dashboardRoutes"));
 
 // =============================================
 // HEALTH CHECK ROUTE
