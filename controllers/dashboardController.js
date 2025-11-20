@@ -1,4 +1,14 @@
-const db = require("../config/db");
+const db = require('../db/connection');
+
+// Helper to convert callback query → Promise
+function runQuery(sql) {
+    return new Promise((resolve, reject) => {
+        db.query(sql, (err, results) => {
+            if (err) return reject(err);
+            resolve(results);
+        });
+    });
+}
 
 // 🟦 1. TOTAL STOCK
 exports.getTotalStock = async (req, res) => {
@@ -13,8 +23,9 @@ exports.getTotalStock = async (req, res) => {
             ) AS all_inv;
         `;
 
-        const [rows] = await db.query(query);
+        const rows = await runQuery(query);
         res.json({ total_stock: rows[0].total_stock || 0 });
+
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: "Error fetching total stock" });
@@ -35,8 +46,9 @@ exports.getOrdersPending = async (req, res) => {
             WHERE status = 'Pending';
         `;
 
-        const [rows] = await db.query(query);
+        const rows = await runQuery(query);
         res.json({ pending_orders: rows[0].pending_orders || 0 });
+
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: "Error fetching pending orders" });
@@ -56,8 +68,9 @@ exports.getInvoicesGenerated = async (req, res) => {
             ) AS all_orders;
         `;
 
-        const [rows] = await db.query(query);
+        const rows = await runQuery(query);
         res.json({ invoices_generated: rows[0].invoices });
+
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: "Error fetching invoices" });
@@ -69,16 +82,17 @@ exports.getReturnsProcessed = async (req, res) => {
     try {
         const query = `
             SELECT SUM(return_count) AS total_returns FROM (
-                SELECT return AS return_count FROM ahmedabad_inventory
-                UNION ALL SELECT return FROM bangalore_inventory
-                UNION ALL SELECT return FROM gurgaon_inventory
-                UNION ALL SELECT return FROM hyderabad_inventory
-                UNION ALL SELECT return FROM mumbai_inventory
+                SELECT \`return\` AS return_count FROM ahmedabad_inventory
+                UNION ALL SELECT \`return\` FROM bangalore_inventory
+                UNION ALL SELECT \`return\` FROM gurgaon_inventory
+                UNION ALL SELECT \`return\` FROM hyderabad_inventory
+                UNION ALL SELECT \`return\` FROM mumbai_inventory
             ) AS all_returns;
         `;
 
-        const [rows] = await db.query(query);
+        const rows = await runQuery(query);
         res.json({ returns_processed: rows[0].total_returns || 0 });
+
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: "Error fetching return count" });
@@ -99,7 +113,7 @@ exports.getPaymentMethods = async (req, res) => {
             GROUP BY payment_mode;
         `;
 
-        const [rows] = await db.query(query);
+        const rows = await runQuery(query);
 
         const response = {
             card: 0,
@@ -114,6 +128,7 @@ exports.getPaymentMethods = async (req, res) => {
         });
 
         res.json(response);
+
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: "Error fetching payment mode counts" });
