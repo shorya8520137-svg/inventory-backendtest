@@ -64,8 +64,12 @@ app.use("/api/hockey", require("./routes/hockeyrouter"));
 // 🟩 Map Tracking
 app.use("/api/map", require("./routes/map"));
 
-// ⭐ NEW — DASHBOARD ROUTES (Total stock, pending, invoices, payment, etc.)
+// ⭐ NEW — DASHBOARD ROUTES
 app.use("/api/dashboard", require("./routes/dashboardRoutes"));
+
+// ⭐⭐ NEW — INVENTORY TRANSFER ROUTE ⭐⭐
+// (Only new addition in your entire server file)
+app.use("/api/inventory-transfer", require("./routes/inventoryTransferRoutes"));
 
 // =============================================
 // HEALTH CHECK ROUTE

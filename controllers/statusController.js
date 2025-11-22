@@ -1,4 +1,6 @@
 const db = require('../db/connection');
+const XLSX = require('xlsx');
+const fs = require('fs');
 
 // 🗺️ Warehouse Table Map
 const warehouseMap = {
@@ -9,76 +11,104 @@ const warehouseMap = {
     'Gurgaon Warehouse': 'Gurgaon_Warehouse'
 };
 
-// 🚀 POST: Override Status by AWB + Warehouse
-exports.overrideStatus = (req, res) => {
-    console.log('[StatusController] 🔧 overrideStatus triggered');
+/* ============================================================
+   🚀 NEW BULK UPLOAD STATUS API (NO FLOW DISTURBED)
+   ============================================================ */
 
-    const { awb, warehouse, newStatus } = req.body;
+exports.bulkUploadStatus = (req, res) => {
+    console.log('[StatusController] 📥 bulkUploadStatus triggered');
 
-    if (!awb || !warehouse || !newStatus) {
-        console.warn('[StatusController] ❌ Missing required fields');
-        return res.status(400).json({ error: 'AWB, warehouse, and newStatus are required' });
+    if (!req.file) {
+        return res.status(400).json({ error: 'Excel file is required' });
+    }
+
+    const { warehouse } = req.body;
+
+    if (!warehouse) {
+        return res.status(400).json({ error: 'Warehouse is required' });
     }
 
     const tableName = warehouseMap[warehouse.trim()];
     if (!tableName) {
-        console.warn('[StatusController] ❌ Invalid warehouse:', warehouse);
         return res.status(400).json({ error: 'Invalid warehouse selected' });
     }
 
-    db.query(
-        `UPDATE \`${tableName}\` SET status = ? WHERE awb = ?`,
-        [newStatus, awb],
-        (err, result) => {
-            if (err) {
-                console.error('[StatusController] ❌ Status update failed:', err.message);
-                return res.status(500).json({ error: 'Status update failed' });
-            }
+    const filePath = req.file.path;
 
-            if (result.affectedRows === 0) {
-                console.warn('[StatusController] ⚠️ No matching AWB found');
-                return res.status(404).json({ error: 'AWB not found in selected warehouse' });
-            }
+    try {
+        // Read Excel
+        const workbook = XLSX.readFile(filePath);
+        const sheetName = workbook.SheetNames[0];
+        const sheetData = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName]);
 
-            console.log(`[StatusController] ✅ Status updated for AWB ${awb} in ${tableName}`);
-            res.status(200).json({ success: true, message: 'Status updated successfully' });
-        }
-    );
-};
+        let updated = [];
+        let notFound = [];
+        let errors = [];
 
-// 🔍 GET: Fetch AWB details from warehouse table
-exports.fetchAwbDetails = (req, res) => {
-    console.log('[StatusController] 🔍 fetchAwbDetails triggered');
+        // Process Each Row
+        const promises = sheetData.map(row => {
+            return new Promise(resolve => {
+                const awb = row.awb;
+                const newStatus = row.status;
 
-    const { awb, warehouse } = req.query;
+                if (!awb || !newStatus) {
+                    errors.push(`Invalid row: Missing awb or status`);
+                    return resolve();
+                }
 
-    if (!awb || !warehouse) {
-        console.warn('[StatusController] ❌ Missing AWB or warehouse in query');
-        return res.status(400).json({ error: 'AWB and warehouse are required' });
+                // Check if AWB exists
+                db.query(
+                    `SELECT awb FROM \`${tableName}\` WHERE awb = ?`,
+                    [awb],
+                    (err, results) => {
+                        if (err) {
+                            errors.push(`DB error for AWB ${awb}: ${err.message}`);
+                            return resolve();
+                        }
+
+                        if (results.length === 0) {
+                            // Not exist — skip
+                            notFound.push(awb);
+                            return resolve();
+                        }
+
+                        // Update Status
+                        db.query(
+                            `UPDATE \`${tableName}\` SET status = ? WHERE awb = ?`,
+                            [newStatus, awb],
+                            err2 => {
+                                if (err2) {
+                                    errors.push(`Failed to update AWB ${awb}: ${err2.message}`);
+                                } else {
+                                    updated.push(awb);
+                                }
+                                return resolve();
+                            }
+                        );
+                    }
+                );
+            });
+        });
+
+        Promise.all(promises).then(() => {
+            fs.unlinkSync(filePath); // Remove uploaded file
+
+            console.log('[StatusController] ✅ Bulk upload completed');
+
+            res.status(200).json({
+                success: true,
+                message: 'Bulk status update completed',
+                updatedCount: updated.length,
+                notFoundCount: notFound.length,
+                failedCount: errors.length,
+                updatedAWB: updated,
+                notFoundAWB: notFound,
+                errors
+            });
+        });
+
+    } catch (e) {
+        console.error('[StatusController] ❌ Excel parsing failed:', e.message);
+        return res.status(500).json({ error: 'Excel file processing failed' });
     }
-
-    const tableName = warehouseMap[warehouse.trim()];
-    if (!tableName) {
-        console.warn('[StatusController] ❌ Invalid warehouse:', warehouse);
-        return res.status(400).json({ error: 'Invalid warehouse selected' });
-    }
-
-    db.query(
-        `SELECT * FROM \`${tableName}\` WHERE awb = ?`,
-        [awb],
-        (err, results) => {
-            if (err) {
-                console.error('[StatusController] ❌ AWB fetch failed:', err.message);
-                return res.status(500).json({ error: 'Query failed' });
-            }
-
-            if (results.length === 0) {
-                console.warn('[StatusController] ⚠️ No AWB found:', awb);
-                return res.status(404).json({ error: 'AWB not found in selected warehouse' });
-            }
-
-            console.log(`[StatusController] ✅ AWB ${awb} found in ${tableName}`);
-            res.status(200).json(results);
-        }
-    );
 };

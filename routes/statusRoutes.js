@@ -6,6 +6,10 @@
 const express = require('express');
 const router = express.Router();
 const statusController = require('../controllers/statusController');
+const multer = require('multer');
+
+// 📁 Multer setup for Excel upload
+const upload = multer({ dest: 'uploads/' });
 
 // 🧭 Log router load confirmation
 console.log('[StatusRouter] ✅ Routes initialized');
@@ -24,7 +28,7 @@ router.get('/', (req, res) => {
 });
 
 /**
- * 🛠️ Update AWB Status
+ * 🛠️ Update AWB Status (Single Update)
  * @route   POST /api/status/update
  * @body    { awb, warehouse, newStatus }
  * @desc    Updates order status in the corresponding warehouse table
@@ -67,7 +71,33 @@ router.get('/fetch-awb', async (req, res) => {
     }
 });
 
+/**
+ * 📥 BULK STATUS UPLOAD (New Route)
+ * @route   POST /api/status/bulk-upload
+ * @form    file: excel.xlsx, warehouse: "Mumbai Warehouse"
+ * @desc    Bulk update statuses from Excel. No new entries created.
+ * @access  Public
+ */
+router.post(
+    '/bulk-upload',
+    upload.single('file'),
+    async (req, res) => {
+        console.log('[StatusRouter] 📥 /bulk-upload endpoint triggered');
+
+        try {
+            await statusController.bulkUploadStatus(req, res);
+        } catch (err) {
+            console.error('[StatusRouter] ❌ Bulk upload failed:', err.message);
+            res.status(500).json({
+                success: false,
+                error: 'Internal server error',
+                details: err.message
+            });
+        }
+    }
+);
+
 // 🧭 Final confirmation log
-console.log('[StatusRouter] ✅ Mounted: /api/status/update & /api/status/fetch-awb');
+console.log('[StatusRouter] ✅ Mounted: /update, /fetch-awb, /bulk-upload');
 
 module.exports = router;

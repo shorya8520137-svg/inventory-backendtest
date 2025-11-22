@@ -1,4 +1,4 @@
-const db = require('../db/connection'); // ✅ MySQL connection
+const db = require('../db/connection'); // MySQL connection
 
 /**
  * 🧾 Insert Damage or Recovery Entry
@@ -6,46 +6,42 @@ const db = require('../db/connection'); // ✅ MySQL connection
 exports.insertDamageEntry = async (req, res) => {
     const { productType, barcode, inventory, actionType, quantity = 1 } = req.body;
 
-    // 🧼 Normalize inputs
-    const normalizedProduct = productType?.trim().replace(/\u200B/g, '');
-    const normalizedBarcode = barcode?.trim().replace(/\u200B/g, '');
+    // Normalize inputs
+    const normalizedProduct = productType?.trim();
+    const normalizedBarcode = barcode?.trim();
     const normalizedInventory = inventory?.trim().toLowerCase();
     const normalizedAction = actionType?.trim().toLowerCase();
     const normalizedQty = Number(quantity) || 1;
 
-    // 🔐 Validate required fields
-    const missingFields = [];
-    if (!normalizedProduct) missingFields.push('productType');
-    if (!normalizedBarcode) missingFields.push('barcode');
-    if (!normalizedInventory) missingFields.push('inventory');
-    if (!normalizedAction) missingFields.push('actionType');
+    // Validate required fields
+    const missing = [];
+    if (!normalizedProduct) missing.push('productType');
+    if (!normalizedBarcode) missing.push('barcode');
+    if (!normalizedInventory) missing.push('inventory');
+    if (!normalizedAction) missing.push('actionType');
 
-    if (missingFields.length > 0) {
-        console.warn('[DamageController] ⚠️ Missing required fields:', {
-            missing: missingFields,
-            payload: req.body
-        });
+    if (missing.length > 0) {
         return res.status(400).json({
             success: false,
-            error: 'All fields are required',
-            missing: missingFields
+            error: 'Missing required fields',
+            missing
         });
     }
 
-    // 🧭 Validate inventory location
-    const allowedInventories = ['gurgaon', 'hyderabad', 'mumbai', 'ahmedabad', 'bangalore'];
-    if (!allowedInventories.includes(normalizedInventory)) {
-        console.warn('[DamageController] ❌ Invalid inventory:', normalizedInventory);
+    // Validate inventory
+    const allowed = ['gurgaon', 'hyderabad', 'mumbai', 'ahmedabad', 'bangalore'];
+    if (!allowed.includes(normalizedInventory)) {
         return res.status(400).json({
             success: false,
-            error: `Invalid inventory location: ${normalizedInventory}`
+            error: `Invalid inventory: ${normalizedInventory}`
         });
     }
 
     const inventoryTable = `${normalizedInventory}_inventory`;
+    const warehouseAlias = normalizedInventory;  // ✔ MATCHES YOUR DB EXACTLY
 
     try {
-        // ✅ Step 1: Insert into damage_recovery_log
+        // STEP 1 — Insert log
         const insertSQL = `
             INSERT INTO damage_recovery_log 
                 (product_type, barcode, inventory_location, action_type, quantity, timestamp)
@@ -60,29 +56,13 @@ exports.insertDamageEntry = async (req, res) => {
             normalizedQty
         ]);
 
-        console.log('[DamageController] ✅ Log inserted:', {
-            entryId: insertResult.insertId,
-            productType: normalizedProduct,
-            barcode: normalizedBarcode,
-            inventory: normalizedInventory,
-            action: normalizedAction,
-            quantity: normalizedQty
-        });
+        console.log('[DamageController] ✅ Log inserted');
 
-        // ✅ Step 2: Normalize warehouse alias for inventory update
-        const warehouseAlias = {
-            gurgaon: 'Gurgaon',
-            hyderabad: 'Hyderabad',
-            mumbai: 'Mumbai',
-            ahmedabad: 'Ahmedabad',
-            bangalore: 'Bangalore'
-        }[normalizedInventory] || normalizedInventory;
-
-        // ✅ Step 3: Update stock count
+        // STEP 2 — Update stock
         const updateSQL = `
             UPDATE ${inventoryTable}
             SET stock = stock ${normalizedAction === 'damage' ? '-' : '+'} ?
-            WHERE code = ? AND TRIM(LOWER(warehouse)) = TRIM(LOWER(?))
+            WHERE code = ? AND warehouse = ?
         `;
 
         const [updateResult] = await db.promise().execute(updateSQL, [
@@ -92,39 +72,31 @@ exports.insertDamageEntry = async (req, res) => {
         ]);
 
         if (updateResult.affectedRows === 0) {
-            console.warn('[DamageController] ⚠️ No inventory row matched:', {
+            console.warn('[DamageController] ⚠️ No matching inventory row found:', {
                 code: normalizedBarcode,
-                warehouse: warehouseAlias,
-                actionType: normalizedAction
+                warehouse: warehouseAlias
             });
         } else {
             console.log('[DamageController] ✅ Stock updated successfully:', {
                 table: inventoryTable,
                 code: normalizedBarcode,
-                warehouse: warehouseAlias,
                 quantity: normalizedQty,
                 action: normalizedAction
             });
         }
 
-        // ✅ Step 4: Final Response
+        // STEP 3 — Final Response
         return res.status(201).json({
             success: true,
-            message: 'Damage/Recovery entry logged and stock updated successfully',
-            entryId: insertResult.insertId,
-            details: {
-                productType: normalizedProduct,
-                barcode: normalizedBarcode,
-                inventory: normalizedInventory,
-                actionType: normalizedAction,
-                quantity: normalizedQty
-            }
+            message: 'Damage/Recovery entry logged & stock updated',
+            entryId: insertResult.insertId
         });
+
     } catch (err) {
-        console.error('[DamageController] ❌ Fatal DB Error:', err.message);
+        console.error('[DamageController] ❌ DB Error:', err.message);
         return res.status(500).json({
             success: false,
-            error: 'Internal database error',
+            error: 'Database error',
             details: err.message
         });
     }

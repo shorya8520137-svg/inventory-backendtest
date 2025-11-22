@@ -26,53 +26,107 @@ exports.insertInventory = (req, res) => {
         return res.status(400).json({ error: 'Invalid or unauthorized table name' });
     }
 
-    // ✅ Clean & normalize payload fields
+    // 🔥 ALWAYS use dropdown warehouse value (Excel warehouse ignored if blank)
+    const fixedWarehouse =
+        (payload.warehouse && payload.warehouse.trim() !== "")
+            ? payload.warehouse.trim()
+            : table.replace("_inventory", ""); // example: "gurgaon_inventory" → "gurgaon"
+
+    // CLEAN PAYLOAD
     const safePayload = {
-        product: (payload.name || '').trim(),
-        variant: (payload.variant || '').trim(),
-        code: (payload.code || '').trim(),
+        product: (payload.name || "").trim(),
+        variant: (payload.variant || "").trim(),
+        code: (payload.code || "").trim(),
         stock: Number(payload.stock) || 0,
-        warehouse: (payload.warehouse || '').trim(),
+        warehouse: fixedWarehouse,
         opening: Number(payload.opening) || 0,
         return: Number(payload.return) || 0,
-        date: payload.date || new Date().toISOString().split('T')[0],
-        time: payload.time || new Date().toTimeString().slice(0, 5)
+        date: payload.date || new Date().toISOString().split("T")[0],
+        time: payload.time || new Date().toTimeString().slice(0, 5),
     };
 
-    // ✅ Build SQL query safely
-    const query = `
-        INSERT INTO ${table}
-        (product, variant, code, stock, warehouse, opening, \`return\`, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    // ============================================
+    // 🔥 NEW LOGIC: UPSERT USING BARCODE (stock merge)
+    // ============================================
+    const checkQuery = `
+        SELECT stock FROM ${table}
+        WHERE code = ?
+        LIMIT 1
     `;
 
-    const values = [
-        safePayload.product,
-        safePayload.variant,
-        safePayload.code,
-        safePayload.stock,
-        safePayload.warehouse,
-        safePayload.opening,
-        safePayload.return,
-        `${safePayload.date} ${safePayload.time}`
-    ];
-
-    // ✅ Execute query
-    db.query(query, values, (err, result) => {
+    db.query(checkQuery, [safePayload.code], (err, result) => {
         if (err) {
-            console.error(`[InventoryController] ❌ Insert failed for ${table}:`, err.message);
+            console.error("[InventoryController] ❌ Check failed:", err.message);
             return res.status(500).json({
                 success: false,
-                error: 'Database insert failed',
+                error: "Database error (checkQuery)",
                 details: err.sqlMessage || err.message
             });
         }
 
-        console.log(`[InventoryController] ✅ Inserted 1 row into ${table}`);
-        res.status(200).json({
-            success: true,
-            message: `Inserted successfully into ${table}`,
-            insertedId: result.insertId || null
-        });
+        if (result.length > 0) {
+            // 🟦 PRODUCT EXISTS → UPDATE STOCK
+            const existingStock = Number(result[0].stock);
+            const newStock = existingStock + safePayload.stock;
+
+            const updateQuery = `
+                UPDATE ${table}
+                SET stock = ?, warehouse = ?, opening = opening, \`return\` = return
+                WHERE code = ?
+            `;
+
+            db.query(updateQuery, [newStock, safePayload.warehouse, safePayload.code], (err2) => {
+                if (err2) {
+                    console.error("[InventoryController] ❌ Update failed:", err2.message);
+                    return res.status(500).json({
+                        success: false,
+                        error: "Database update failed",
+                        details: err2.sqlMessage || err2.message
+                    });
+                }
+
+                return res.status(200).json({
+                    success: true,
+                    message: `Updated (merged stock) in ${table}`,
+                    updatedStock: newStock
+                });
+            });
+
+        } else {
+            // 🟩 PRODUCT NOT FOUND → INSERT NEW ROW
+            const insertQuery = `
+                INSERT INTO ${table}
+                (product, variant, code, stock, warehouse, opening, \`return\`, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            `;
+
+            const values = [
+                safePayload.product,
+                safePayload.variant,
+                safePayload.code,
+                safePayload.stock,
+                safePayload.warehouse,
+                safePayload.opening,
+                safePayload.return,
+                `${safePayload.date} ${safePayload.time}`
+            ];
+
+            db.query(insertQuery, values, (err3, result3) => {
+                if (err3) {
+                    console.error(`[InventoryController] ❌ Insert failed for ${table}:`, err3.message);
+                    return res.status(500).json({
+                        success: false,
+                        error: 'Database insert failed',
+                        details: err3.sqlMessage || err3.message
+                    });
+                }
+
+                return res.status(200).json({
+                    success: true,
+                    message: `Inserted new row in ${table}`,
+                    insertedId: result3.insertId || null
+                });
+            });
+        }
     });
 };

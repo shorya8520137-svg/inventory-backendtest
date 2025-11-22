@@ -1,4 +1,26 @@
-const db = require('../db/connection');
+const db = require("../db/connection");
+
+// 🧠 FUNCTION: Keep only the latest scan for each status
+function getLatestByStatus(rows) {
+    const map = new Map();
+
+    rows.forEach(row => {
+        const key = row.status;
+
+        if (!map.has(key)) {
+            map.set(key, row);
+        } else {
+            const saved = map.get(key);
+
+            // Compare scan_time
+            if (new Date(row.scan_time) > new Date(saved.scan_time)) {
+                map.set(key, row);
+            }
+        }
+    });
+
+    return Array.from(map.values());
+}
 
 exports.getTrackingByAwb = (req, res) => {
     const awb = req.params.awb;
@@ -17,6 +39,9 @@ exports.getTrackingByAwb = (req, res) => {
                 console.error("TIMELINE ERROR:", err);
                 return res.status(500).json({ error: "Server error" });
             }
+
+            // 👉 CLEAN timeline (LATEST per status only)
+            const cleanedTimeline = getLatestByStatus(timelineRows);
 
             // CUSTOMER DETAILS
             db.query(
@@ -70,8 +95,8 @@ exports.getTrackingByAwb = (req, res) => {
                                         return res.status(500).json({ error: "Server error" });
                                     }
 
-                                    // TIMELINE FORMAT
-                                    const formattedTimeline = timelineRows.map(row => ({
+                                    // 🟦 FORMAT TIMELINE FOR FRONTEND
+                                    const formattedTimeline = cleanedTimeline.map(row => ({
                                         label: row.status,
                                         icon: "🚚",
                                         active: true,
@@ -79,6 +104,7 @@ exports.getTrackingByAwb = (req, res) => {
                                         location: row.location
                                     }));
 
+                                    // 🎉 SEND FINAL RESPONSE
                                     return res.json({
                                         customer: {
                                             awb,
